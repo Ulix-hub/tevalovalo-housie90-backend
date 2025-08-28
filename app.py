@@ -1,4 +1,4 @@
-# app.py  (known-good, with CORS + whoami + validate + tickets)
+# app.py  (clean, with CORS + /whoami + /validate + /api/tickets)
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sqlite3, os
@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ---- CORS (liberal; tighten later if you want) ----
+# ---- CORS ----
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
@@ -42,7 +42,7 @@ def init_db():
         """)
         conn.commit()
 
-# ---- Fingerprints / health ----
+# ---- Health/fingerprint ----
 @app.route("/whoami")
 def whoami():
     return jsonify({
@@ -55,7 +55,7 @@ def whoami():
 def home():
     return "Tevalovalo Housie90 backend is running ✅"
 
-# ---- Validate (one-time) ----
+# ---- Validate (one-time use) ----
 @app.route("/validate", methods=["POST"])
 def validate():
     data = request.get_json() or {}
@@ -82,7 +82,8 @@ def validate():
     return jsonify({"valid": True, "reason": "success", "expiry": expiry})
 
 # ---- Tickets ----
-from ticket_generator_module import generate_full_strip  # your generator
+# Make sure ticket_generator_module.py is in the same repo and exports generate_full_strip()
+from ticket_generator_module import generate_full_strip
 
 @app.route("/api/tickets", methods=["GET"])
 def get_tickets():
