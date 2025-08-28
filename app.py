@@ -1,4 +1,3 @@
-# app.py  (clean, with CORS + /whoami + /validate + /api/tickets)
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sqlite3, os
@@ -7,7 +6,7 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# ---- CORS ----
+# ---- CORS (liberal; you can restrict to your Netlify domain later) ----
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
@@ -25,7 +24,7 @@ def add_cors_headers(resp):
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return resp
 
-# ---- DB ----
+# ---- DB setup ----
 DB_FILE = "codes.db"
 lock = Lock()
 
@@ -42,12 +41,12 @@ def init_db():
         """)
         conn.commit()
 
-# ---- Health/fingerprint ----
+# ---- Fingerprint/health ----
 @app.route("/whoami")
 def whoami():
     return jsonify({
-        "service": os.environ.get("RENDER_SERVICE_NAME", "unknown"),
-        "url": os.environ.get("RENDER_EXTERNAL_URL", "n/a"),
+        "service": os.environ.get("RENDER_SERVICE_NAME", "local-or-unknown"),
+        "env": os.environ.get("RENDER_EXTERNAL_URL", "n/a"),
         "time": datetime.now().isoformat()
     })
 
@@ -55,12 +54,13 @@ def whoami():
 def home():
     return "Tevalovalo Housie90 backend is running ✅"
 
-# ---- Validate (one-time use) ----
+# ---- Validation (one-time use) ----
 @app.route("/validate", methods=["POST"])
 def validate():
     data = request.get_json() or {}
     code = (data.get("code") or "").strip()
     buyer = (data.get("buyer") or "").strip()
+
     if not code:
         return jsonify({"valid": False, "reason": "empty_code"}), 400
 
@@ -74,29 +74,67 @@ def validate():
             used, expiry = row
             if used.lower() == "yes":
                 return jsonify({"valid": False, "reason": "already_used"})
+            # if no expiry set, default to +30 days
             if not expiry:
                 expiry = (datetime.now() + timedelta(days=30)).isoformat()
+            # mark used
             c.execute("UPDATE codes SET Used='Yes', BuyerName=?, Expiry=? WHERE Code=?",
                       (buyer, expiry, code))
             conn.commit()
-    return jsonify({"valid": True, "reason": "success", "expiry": expiry})
+            return jsonify({"valid": True, "reason": "success", "expiry": expiry})
+
+# ---- Admin: add/list codes (protect with a header key) ----
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
+
+def _auth_ok(req):
+    return ADMIN_KEY and req.headers.get("X-Admin-Key") == ADMIN_KEY
+
+@app.route("/admin/add_code", methods=["POST"])
+def admin_add_code():
+    if not _auth_ok(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+    data = request.get_json() or {}
+    code = (data.get("code") or "").strip()
+    buyer = (data.get("buyer") or "").strip()
+    days = int(data.get("days") or 30)
+    if not code:
+        return jsonify({"ok": False, "error": "missing_code"}), 400
+    expiry = (datetime.now() + timedelta(days=days)).isoformat()
+    with lock:
+        with sqlite3.connect(DB_FILE) as conn:
+            c = conn.cursor()
+            c.execute("""
+                INSERT OR REPLACE INTO codes (Code, Used, BuyerName, Expiry)
+                VALUES (?, 'No', ?, ?)
+            """, (code, buyer, expiry))
+            conn.commit()
+    return jsonify({"ok": True, "code": code, "expiry": expiry})
+
+@app.route("/admin/list_codes", methods=["GET"])
+def admin_list_codes():
+    if not _auth_ok(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+    with sqlite3.connect(DB_FILE) as conn:
+        c = conn.cursor()
+        c.execute("SELECT Code, Used, BuyerName, Expiry FROM codes ORDER BY Code LIMIT 100")
+        rows = [{"Code": a, "Used": b, "BuyerName": d, "Expiry": e} for (a,b,d,e) in c.fetchall()]
+    return jsonify({"ok": True, "rows": rows})
 
 # ---- Tickets ----
-# Make sure ticket_generator_module.py is in the same repo and exports generate_full_strip()
-from ticket_generator_module import generate_full_strip
+from ticket_generator_module import generate_full_strip  # your existing module
 
 @app.route("/api/tickets", methods=["GET"])
 def get_tickets():
     try:
         count = int(request.args.get("cards", 1))
-    except:
-        count = 1
-    count = 1 if count < 1 else 10 if count > 10 else count
-    all_tickets = []
-    for _ in range(count):
-        strip = generate_full_strip()  # 6 tickets per strip
-        all_tickets.extend(strip)
-    return jsonify({"cards": all_tickets})
+        count = 1 if count < 1 else 10 if count > 10 else count
+        all_tickets = []
+        for _ in range(count):
+            strip = generate_full_strip()  # 6 tickets per strip
+            all_tickets.extend(strip)
+        return jsonify({"cards": all_tickets})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ---- Run ----
 if __name__ == "__main__":
