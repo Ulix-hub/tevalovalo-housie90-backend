@@ -40,10 +40,8 @@ def init_db():
           )
         """)
         conn.commit()
-# ensure the table exists even on Render (gunicorn import)
-@app.before_first_request
-def _ensure_db_on_first_request():
-    init_db()
+# Flask 3–safe: initialize DB at import time (works on Render/gunicorn)
+init_db()
 
 # ---- Fingerprint/health ----
 @app.route("/whoami")
@@ -121,7 +119,7 @@ def admin_list_codes():
     with sqlite3.connect(DB_FILE) as conn:
         c = conn.cursor()
         c.execute("SELECT Code, Used, BuyerName, Expiry FROM codes ORDER BY Code LIMIT 100")
-        rows = [{"Code": a, "Used": b, "BuyerName": d, "Expiry": e} for (a,b,d,e) in c.fetchall()]
+        rows = [{"Code": a, "Used": b, "BuyerName": c_, "Expiry": d} for (a,b,c_,d) in c.fetchall()]
     return jsonify({"ok": True, "rows": rows})
 
 # ---- Tickets ----
