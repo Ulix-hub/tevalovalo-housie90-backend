@@ -40,6 +40,12 @@ def init_db():
           )
         """)
         conn.commit()
+# ensure the table exists even on Render (gunicorn import)
+init_db()
+
+@app.before_first_request
+def _ensure_db_on_first_request():
+    init_db()
 
 # ---- Fingerprint/health ----
 @app.route("/whoami")
