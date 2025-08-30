@@ -243,21 +243,22 @@ def admin_list_codes():
     return jsonify({"ok": True, "rows": rows})
 
 # ======== Tickets ========
-from ticket_generator_module import generate_full_strip, validate_strip
+from ticket_generator_module import generate_full_strip
 
 @app.route("/api/tickets", methods=["GET"])
-def api_tickets():
+def get_tickets():
     try:
         count = int(request.args.get("cards", 1))
     except Exception:
         count = 1
-    count = max(1, min(count, 60))
+    count = max(1, min(count, 10))
 
     all_tickets = []
     for _ in range(count):
-        strip = generate_full_strip()   # 6 tickets per strip
+        strip = generate_full_strip()   # returns 6 valid tickets (3x9, 15 nums, column ranges, per-column caps)
         all_tickets.extend(strip)
     return jsonify({"cards": all_tickets})
+
 
 # ======== Run (local) ========
 if __name__ == "__main__":
