@@ -243,7 +243,7 @@ def admin_list_codes():
     return jsonify({"ok": True, "rows": rows})
 
 # ======== Tickets ========
-from ticket_generator_module import generate_full_strip
+from ticket_generator_module import generate_full_strip, validate_strip
 
 @app.route("/api/tickets", methods=["GET"])
 def get_tickets():
