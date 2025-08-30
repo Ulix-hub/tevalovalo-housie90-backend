@@ -269,8 +269,6 @@ def admin_list_codes():
 
 # ======== Tickets ========
 from ticket_generator_module import generate_full_strip  # (and validate_strip only if you added /api/selftest)
-
-
 @app.route("/api/tickets", methods=["GET"])
 def get_tickets():
     try:
@@ -284,7 +282,19 @@ def get_tickets():
         strip = generate_full_strip()   # returns 6 valid tickets (3x9, 15 nums, column ranges, per-column caps)
         all_tickets.extend(strip)
     return jsonify({"cards": all_tickets})
-
+    
+@app.route("/api/selftest", methods=["GET"])
+def api_selftest():
+    try:
+        strip = generate_full_strip()
+        ok, details = validate_strip(strip)
+        return jsonify({
+            "ok": ok,
+            "details": details,
+            "sample_first_ticket": strip[0]  # handy to eyeball
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # ======== Run (local) ========
 if __name__ == "__main__":
