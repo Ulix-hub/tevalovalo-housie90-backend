@@ -243,27 +243,21 @@ def admin_list_codes():
     return jsonify({"ok": True, "rows": rows})
 
 # ======== Tickets ========
-from ticket_generator_module import generate_full_strip  # your existing module
+from ticket_generator_module import generate_full_strip, validate_strip
 
 @app.route("/api/tickets", methods=["GET"])
-def get_tickets():
-    # Optional token gating (Step 6) — OFF by default
-    if REQUIRE_TOKEN_FOR_TICKETS:
-        tok = _get_bearer_token(request)
-        if not _token_valid(tok):
-            return jsonify({"error": "unauthorized"}), 401
-
+def api_tickets():
     try:
-        # 'cards' = number of strips to return (each strip has 6 tickets)
         count = int(request.args.get("cards", 1))
-        count = 1 if count < 1 else 10 if count > 10 else count
-        all_tickets = []
-        for _ in range(count):
-            strip = generate_full_strip()  # returns a list of 6 tickets
-            all_tickets.extend(strip)
-        return jsonify({"cards": all_tickets})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        count = 1
+    count = max(1, min(count, 60))
+
+    all_tickets = []
+    for _ in range(count):
+        strip = generate_full_strip()   # 6 tickets per strip
+        all_tickets.extend(strip)
+    return jsonify({"cards": all_tickets})
 
 # ======== Run (local) ========
 if __name__ == "__main__":
