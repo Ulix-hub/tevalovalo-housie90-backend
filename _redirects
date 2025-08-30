@@ -1,0 +1,3 @@
+/whoami     https://YOUR-HOUSIE90-BACKEND.onrender.com/whoami      200
+/validate   https://YOUR-HOUSIE90-BACKEND.onrender.com/validate    200
+/api/*      https://YOUR-HOUSIE90-BACKEND.onrender.com/api/:splat  200
