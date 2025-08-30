@@ -6,6 +6,31 @@ from threading import Lock
 from datetime import datetime, timedelta, timezone
 
 app = Flask(__name__)
+from flask_cors import CORS
+from flask import request
+
+CORS(
+    app,
+    resources={r"/*": {"origins": [r"https://.*\.netlify\.app", "http://localhost", "http://127.0.0.1:5500"]}},
+    supports_credentials=False,
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Admin-Key"],
+    expose_headers=["Content-Type"],
+    max_age=86400,
+)
+
+@app.after_request
+def add_cors_headers(resp):
+    origin = request.headers.get("Origin")
+    resp.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+    resp.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Key")
+    resp.headers["Vary"] = "Origin"
+    if origin:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+    else:
+        resp.headers.setdefault("Access-Control-Allow-Origin", "*")
+    return resp
+
 
 # ======== Config ========
 # Frontend origin lock (Step 5). For dev convenience, we also allow localhost/127.0.0.1.
