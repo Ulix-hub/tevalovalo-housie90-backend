@@ -268,7 +268,8 @@ def admin_list_codes():
     return jsonify({"ok": True, "rows": rows})
 
 # ======== Tickets ========
-from ticket_generator_module import generate_full_strip  # (and validate_strip only if you added /api/selftest)
+from ticket_generator_module import generate_full_strip, validate_strip
+
 @app.route("/api/tickets", methods=["GET"])
 def get_tickets():
     try:
