@@ -1,228 +1,227 @@
 # ticket_generator_module.py
 import random
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple
 
-Ticket = List[List[Optional[int]]]       # 3 rows x 9 cols, 0 = blank
-Strip  = List[Ticket]                     # 6 tickets
+# ----- Helpers -----
+def _column_target_totals() -> List[int]:
+    # per-column total numbers across a strip (6 tickets = 90 nums)
+    # 1–9 : 9, 10–19 : 10, ... , 80–90 : 11
+    return [9, 10, 10, 10, 10, 10, 10, 10, 11]
 
-COL_RANGES: Dict[int, range] = {
-    0: range(1, 10),     # 9
-    1: range(10, 20),    # 10
-    2: range(20, 30),    # 10
-    3: range(30, 40),    # 10
-    4: range(40, 50),    # 10
-    5: range(50, 60),    # 10
-    6: range(60, 70),    # 10
-    7: range(70, 80),    # 10
-    8: range(80, 91),    # 11  (80..90)
-}
-COL_TOTALS = [9,10,10,10,10,10,10,10,11]  # per-strip column counts
-TICKETS = 6
-ROWS    = 3
-COLS    = 9
+def _column_ranges() -> List[range]:
+    return [
+        range(1, 10),   # col 0
+        range(10, 20),  # col 1
+        range(20, 30),  # col 2
+        range(30, 40),  # col 3
+        range(40, 50),  # col 4
+        range(50, 60),  # col 5
+        range(60, 70),  # col 6
+        range(70, 80),  # col 7
+        range(80, 91),  # col 8
+    ]
 
-def _balanced_column_assignments() -> List[List[int]]:
+def _build_ticket_row_mask(col_counts: List[int]) -> List[List[int]]:
     """
-    Make a 6x9 matrix 'counts' with values in {1,2} such that:
-      - For each column c, sum_t counts[t][c] == COL_TOTALS[c]
-      - For each ticket t, sum_c counts[t][c] == 15
-      - Thus every ticket has at least 1 in every column (no blank column).
-    Strategy:
-      * Start with 1 in every cell (base = 6 per column, 9 per ticket)
-      * Distribute 'extras' for each column (total[c] - 6) across tickets
-        while ensuring each ticket receives exactly 6 extras overall.
+    Given per-column counts for a single ticket (each 1 or 2; sum=15),
+    assign them to rows so each row has exactly 5 cells.
+    Returns a 3x9 mask of 0/1 (1 = place a number).
+    Raises ValueError if fails.
     """
-    # base ones everywhere
-    counts = [[1 for _ in range(COLS)] for _ in range(TICKETS)]
-    extras_needed_per_ticket = [6 for _ in range(TICKETS)]  # 9 base -> need +6 = 15
+    # Start empty mask
+    mask = [[0] * 9 for _ in range(3)]
+    # remaining per row
+    row_need = [5, 5, 5]  # 3 rows x 5 = 15
 
-    # randomize column order to vary layouts
-    cols_order = list(range(COLS))
+    # columns in random order so distribution varies
+    cols = list(range(9))
+    random.shuffle(cols)
+
+    # First place “2” columns: put in the two rows with highest remaining needs
+    two_cols = [c for c, k in enumerate(col_counts) if k == 2]
+    random.shuffle(two_cols)
+    for c in two_cols:
+        # pick two rows with greatest remaining slots
+        rows_sorted = sorted(range(3), key=lambda r: -row_need[r])
+        placed = 0
+        for r in rows_sorted:
+            if row_need[r] > 0 and mask[r][c] == 0:
+                mask[r][c] = 1
+                row_need[r] -= 1
+                placed += 1
+                if placed == 2:
+                    break
+        if placed != 2:
+            raise ValueError("Cannot place 2 in column")
+
+    # Then place “1” columns
+    one_cols = [c for c, k in enumerate(col_counts) if k == 1]
+    random.shuffle(one_cols)
+    for c in one_cols:
+        # choose the row with the most remaining slots
+        rows_sorted = sorted(range(3), key=lambda r: -row_need[r])
+        placed = False
+        for r in rows_sorted:
+            if row_need[r] > 0 and mask[r][c] == 0:
+                mask[r][c] = 1
+                row_need[r] -= 1
+                placed = True
+                break
+        if not placed:
+            raise ValueError("Cannot place 1 in column")
+
+    if any(x != 0 for x in row_need):
+        raise ValueError("Row sums not satisfied")
+
+    return mask
+
+def _assign_strip_column_plan() -> List[List[int]]:
+    """
+    Create a 6x9 plan of 1/2 per ticket/column so:
+      - every ticket has exactly 15 cells (sum per ticket across columns == 15)
+      - every column across tickets sums to its target (e.g. 9,10,..,11)
+      - each ticket/column is 1 or 2 (=> no blank columns)
+    Returns list[ticket][col] = 1 or 2
+    """
+    targets = _column_target_totals()  # per column totals
+    # baseline: every ticket gets 1 per column => each ticket has 9
+    # extras needed per column:
+    extras_per_col = [t - 6 for t in targets]  # 9->3, 10->4, 11->5
+    # each ticket needs 6 extras (to go from 9 to 15)
+    extras_remaining_per_ticket = [6] * 6
+
+    # plan init to ones
+    plan = [[1] * 9 for _ in range(6)]
+
+    # we will assign extras (add +1) for columns
+    # process columns in random order to vary strips
+    cols_order = list(range(9))
     random.shuffle(cols_order)
 
     for c in cols_order:
-        extras = COL_TOTALS[c] - TICKETS  # because base 1 assigned to all 6 tickets
-        # choose 'extras' tickets preferring those who still need more extras
-        # tie-break randomly
-        ticket_ids = list(range(TICKETS))
-        random.shuffle(ticket_ids)
-        ticket_ids.sort(key=lambda t: extras_needed_per_ticket[t], reverse=True)
+        k = extras_per_col[c]  # how many "twos" we need in this column
+        # choose k tickets that still need extras, prefer those with most remaining
+        for _ in range(k):
+            # eligible tickets are those who still can take an extra
+            elig = [i for i in range(6) if extras_remaining_per_ticket[i] > 0]
+            if not elig:
+                # if we can't place, give up and retry entirely
+                raise ValueError("No eligible ticket for extra")
+            # pick the ticket with the most remaining extras (ties random)
+            random.shuffle(elig)
+            elig.sort(key=lambda i: -extras_remaining_per_ticket[i])
+            t = elig[0]
+            # place extra in column c for ticket t
+            plan[t][c] = 2
+            extras_remaining_per_ticket[t] -= 1
 
-        chosen = []
-        for t in ticket_ids:
-            if extras == 0:
-                break
-            if extras_needed_per_ticket[t] > 0:
-                counts[t][c] += 1
-                extras_needed_per_ticket[t] -= 1
-                extras -= 1
-                chosen.append(t)
+    if any(x != 0 for x in extras_remaining_per_ticket):
+        raise ValueError("Extras not balanced among tickets")
 
-        if extras != 0:
-            # If we failed to place all extras (shouldn't happen), restart recursively
-            return _balanced_column_assignments()
+    return plan  # 6 x 9 of 1 or 2
 
-    # Sanity check: each ticket now has exactly 15; each column sums to COL_TOTALS
-    for t in range(TICKETS):
-        assert sum(counts[t]) == 15, f"ticket {t} not 15 ({sum(counts[t])})"
-    for c in range(COLS):
-        assert sum(counts[t][c] for t in range(TICKETS)) == COL_TOTALS[c], "col total mismatch"
-
-    return counts
-
-def _fill_rows_for_ticket(col_counts: List[int]) -> List[List[int]]:
-    """
-    Given 9 integers (each 1 or 2) whose sum is 15, generate a 3x9 0/1 layout with
-    each row sum exactly 5 and each column sum == col_counts[c].
-    Greedy + retry is enough because counts are gentle (only 1 or 2).
-    """
-    for _ in range(200):  # retry guard
-        layout = [[0]*COLS for _ in range(ROWS)]
-        remain = [5,5,5]
-
-        # place columns with 2 first
-        two_cols = [c for c,v in enumerate(col_counts) if v == 2]
-        random.shuffle(two_cols)
-        ok = True
-        for c in two_cols:
-            # choose two distinct rows with biggest remaining capacity
-            rows_sorted = list(range(ROWS))
-            random.shuffle(rows_sorted)
-            rows_sorted.sort(key=lambda r: remain[r], reverse=True)
-            placed = 0
-            for r in rows_sorted:
-                if remain[r] > 0 and layout[r][c] == 0:
-                    layout[r][c] = 1
-                    remain[r] -= 1
-                    placed += 1
-                    if placed == 2:
-                        break
-            if placed < 2:
-                ok = False
-                break
-        if not ok:
+def _layout_for_ticket(col_counts: List[int]) -> List[List[int]]:
+    # try a few times to map 1/2 per column into a row mask (3x9)
+    for _ in range(50):
+        try:
+            return _build_ticket_row_mask(col_counts)
+        except ValueError:
             continue
+    raise ValueError("Failed to create row layout")
 
-        # place columns with 1
-        one_cols = [c for c,v in enumerate(col_counts) if v == 1]
-        random.shuffle(one_cols)
-        for c in one_cols:
-            rows_sorted = list(range(ROWS))
-            random.shuffle(rows_sorted)
-            rows_sorted.sort(key=lambda r: remain[r], reverse=True)
-            placed = False
-            for r in rows_sorted:
-                if remain[r] > 0 and layout[r][c] == 0:
-                    layout[r][c] = 1
-                    remain[r] -= 1
-                    placed = True
-                    break
-            if not placed:
-                ok = False
-                break
-        if not ok:
-            continue
-
-        if remain == [0,0,0]:
-            return layout
-
-    raise ValueError("row-placement failed")
-
-def _sort_columns_top_down(ticket: Ticket) -> Ticket:
-    # sort non-zero values in each column ascending, keep 0s where they are not used
-    for c in range(COLS):
-        present = [(r, ticket[r][c]) for r in range(ROWS) if ticket[r][c] not in (0, None)]
-        values  = sorted(v for _, v in present)
-        # write back in row order of existing ones
-        i = 0
-        for r in range(ROWS):
-            if ticket[r][c] not in (0, None):
-                ticket[r][c] = values[i]
-                i += 1
-    return ticket
-
-def generate_full_strip() -> Strip:
+def _distribute_numbers_to_layouts(layouts: List[List[List[int]]]) -> List[List[List[Optional[int]]]]:
     """
-    Build a full, valid Housie90 strip (6 tickets) that meets all rules.
+    layouts: list of 6 items, each a 3x9 mask (0/1)
+    Returns the 6 filled tickets with ascending numbers per column.
     """
-    # 1) Pre-shuffle numbers per column
-    col_numbers = {c: list(COL_RANGES[c]) for c in range(COLS)}
-    for c in range(COLS):
-        random.shuffle(col_numbers[c])
+    # prepare column pools (exact totals)
+    col_ranges = _column_ranges()
+    totals = _column_target_totals()
+    pools = []
+    for c in range(9):
+        nums = list(col_ranges[c])
+        # sample exactly totals[c] unique numbers from this column range
+        chosen = random.sample(nums, totals[c])
+        chosen.sort()
+        pools.append(chosen)
 
-    # 2) Decide how many numbers each ticket gets in each column (1 or 2), balanced to 15/strip totals
-    counts = _balanced_column_assignments()  # 6 x 9
+    # Now assign numbers to each column, ticket by ticket, top-to-bottom
+    tickets = [[[None for _ in range(9)] for __ in range(3)] for ___ in range(6)]
 
-    # 3) For each ticket, choose rows for those column-counts (row sums = 5)
-    layouts = [_fill_rows_for_ticket(counts[t]) for t in range(TICKETS)]  # 6 x (3 x 9)
-
-    # 4) Build tickets, pulling actual numbers from each column
-    strip: Strip = []
-    for t in range(TICKETS):
-        ticket: Ticket = [[0]*COLS for _ in range(ROWS)]
-        for c in range(COLS):
-            need = counts[t][c]
-            # rows where we put 1s
-            rows_here = [r for r in range(ROWS) if layouts[t][r][c] == 1]
-            assert len(rows_here) == need
-            # pop that many numbers from the column pool
+    for c in range(9):
+        for t in range(6):
+            # collect row indices where we need numbers for this ticket/col
+            rows_here = [r for r in range(3) if layouts[t][r][c] == 1]
+            rows_here.sort()  # ensure ascending top->bottom
             for r in rows_here:
-                ticket[r][c] = col_numbers[c].pop()
-        strip.append(_sort_columns_top_down(ticket))
+                if not pools[c]:
+                    raise ValueError("Ran out of numbers in column pool")
+                tickets[t][r][c] = pools[c].pop(0)
 
-    # 5) Final sanity: used all column totals
-    for c in range(COLS):
-        if len(col_numbers[c]) != len(COL_RANGES[c]) - COL_TOTALS[c]:
-            raise AssertionError("Column pool mismatch after fill")
+    return tickets
 
-    return strip
-
-# --------- Optional validator (can be used in a /api/selftest) ----------
-def validate_strip(strip: Strip) -> Dict[str, object]:
-    ok = True
-    errors = []
-
-    # a) exactly 6 tickets
-    if len(strip) != 6:
-        ok = False
-        errors.append("Strip must have 6 tickets")
-
-    # b) per ticket rows=3, cols=9; row sums=5; col per ticket in {0..3}
-    for ti, t in enumerate(strip):
-        if len(t) != 3 or any(len(row) != 9 for row in t):
-            ok = False
-            errors.append(f"Ticket {ti}: size must be 3x9")
+# ----- Public API -----
+def generate_full_strip() -> List[List[List[Optional[int]]]]:
+    """
+    Returns a list of 6 tickets (each 3x9 with ints or None).
+    Rules:
+      - Strip uses 1..90 exactly once
+      - Each ticket: 15 numbers, 5 per row
+      - Per ticket column count is 1 or 2 (no blank column)
+      - Numbers ascending within each column
+    """
+    for _ in range(200):  # a few attempts in case of unlucky randomness
+        try:
+            # 1) column plan per ticket (6x9 of 1/2)
+            plan = _assign_strip_column_plan()
+            # 2) build per-ticket row layouts (3x9 masks)
+            layouts = [_layout_for_ticket(plan[t]) for t in range(6)]
+            # 3) fill numbers
+            tickets = _distribute_numbers_to_layouts(layouts)
+            return tickets
+        except ValueError:
             continue
-        row_sums = [sum(1 for v in row if v not in (0, None)) for row in t]
-        if row_sums != [5,5,5]:
-            ok = False
-            errors.append(f"Ticket {ti}: row sums not [5,5,5] -> {row_sums}")
-        # no blank columns (per your preference)
-        for c in range(9):
-            col_count = sum(1 for r in range(3) if t[r][c] not in (0, None))
-            if col_count == 0:
-                ok = False
-                errors.append(f"Ticket {ti}: column {c} is blank")
+    raise ValueError("Failed to generate a valid strip after several attempts")
 
-    # c) strip coverage: exactly numbers 1..90 used once
-    seen = []
+def validate_strip(strip: List[List[List[Optional[int]]]]) -> Tuple[bool, str]:
+    """
+    Quick validator for debugging.
+    """
+    if len(strip) != 6:
+        return False, "Strip must have 6 tickets"
+    seen = set()
+    totals = [0]*9
     for t in strip:
-        for r in range(3):
-            for c in range(9):
+        # shape
+        if len(t) != 3 or any(len(r) != 9 for r in t):
+            return False, "Ticket shape must be 3x9"
+        # per row = 5
+        for r in t:
+            if sum(1 for v in r if v is not None) != 5:
+                return False, "Each row must have exactly 5 numbers"
+        # per column ascending, and count 1 or 2 (no blank col)
+        for c in range(9):
+            col_vals = [t[r][c] for r in range(3) if t[r][c] is not None]
+            if not (1 <= len(col_vals) <= 2):
+                return False, "Each column must have 1 or 2 numbers in a ticket"
+            if col_vals != sorted(col_vals):
+                return False, "Column not ascending"
+    # strip-level: 1..90 exactly once, per column totals correct
+    for c in range(9):
+        rng = _column_ranges()[c]
+        want = set(rng)
+        got = []
+        for t in strip:
+            for r in range(3):
                 v = t[r][c]
-                if v not in (0, None):
-                    seen.append(v)
-    if sorted(seen) != list(range(1, 91)):
-        ok = False
-        errors.append("Strip does not contain exactly 1..90 once each")
-
-    # d) per column totals across strip
-    col_totals = [0]*9
-    for t in strip:
-        for c in range(9):
-            col_totals[c] += sum(1 for r in range(3) if t[r][c] not in (0, None))
-    if col_totals != COL_TOTALS:
-        ok = False
-        errors.append(f"Column totals mismatch: {col_totals} != {COL_TOTALS}")
-
-    return {"ok": ok, "errors": errors, "col_totals": col_totals}
+                if v is not None:
+                    got.append(v)
+        if len(got) != _column_target_totals()[c]:
+            return False, f"Column {c} wrong total"
+        if set(got) - set(rng):
+            return False, f"Column {c} has out-of-range"
+        totals[c] = len(got)
+        seen.update(got)
+    if seen != set(range(1,91)):
+        return False, "Not all numbers 1..90 used exactly once"
+    return True, "ok"
