@@ -268,35 +268,34 @@ def admin_list_codes():
     return jsonify({"ok": True, "rows": rows})
 
 # ======== Tickets ========
+# top of file:
 from ticket_generator_module import generate_full_strip, validate_strip
 
+# add a quick self-test endpoint (handy in DevTools)
+@app.route("/api/selftest")
+def api_selftest():
+    try:
+        strip = generate_full_strip()
+        ok, msg = validate_strip(strip)
+        return jsonify({"ok": ok, "msg": msg, "sample_first_ticket": strip[0]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# replace your /api/tickets route with:
 @app.route("/api/tickets", methods=["GET"])
 def get_tickets():
     try:
         count = int(request.args.get("cards", 1))
     except Exception:
         count = 1
-    count = max(1, min(count, 10))
+    count = 1 if count < 1 else 10 if count > 10 else count
 
     all_tickets = []
     for _ in range(count):
-        strip = generate_full_strip()   # returns 6 valid tickets (3x9, 15 nums, column ranges, per-column caps)
+        strip = generate_full_strip()  # 6 tickets
         all_tickets.extend(strip)
-    return jsonify({"cards": all_tickets})
-    
-@app.route("/api/selftest", methods=["GET"])
-def api_selftest():
-    try:
-        strip = generate_full_strip()
-        ok, details = validate_strip(strip)
-        return jsonify({
-            "ok": ok,
-            "details": details,
-            "sample_first_ticket": strip[0]  # handy to eyeball
-        })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
 
+    return jsonify({"cards": all_tickets})
 # ======== Run (local) ========
 if __name__ == "__main__":
     init_db()
