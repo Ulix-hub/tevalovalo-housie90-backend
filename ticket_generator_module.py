@@ -1,235 +1,274 @@
 # ticket_generator_module.py
 import random
+from typing import List, Optional, Tuple
 
-# Column ranges
-COLUMN_RANGES = {
-    0: list(range(1, 10)),
-    1: list(range(10, 20)),
-    2: list(range(20, 30)),
-    3: list(range(30, 40)),
-    4: list(range(40, 50)),
-    5: list(range(50, 60)),
-    6: list(range(60, 70)),
-    7: list(range(70, 80)),
-    8: list(range(80, 91)),
-}
+# Column ranges (inclusive)
+COL_RANGES = [
+    (1, 9),   # col 0
+    (10, 19), # col 1
+    (20, 29), # col 2
+    (30, 39), # col 3
+    (40, 49), # col 4
+    (50, 59), # col 5
+    (60, 69), # col 6
+    (70, 79), # col 7
+    (80, 90), # col 8
+]
 
-# Per-column totals across an entire strip (6 tickets) — using all 1..90
+# Target totals across the whole strip (6 tickets) per column:
+# 9 + 10*7 + 11 = 90 (each number 1..90 exactly once)
 STRIP_COL_TOTALS = [9, 10, 10, 10, 10, 10, 10, 10, 11]
 
+# ------------------------- VALIDATION -------------------------
 
-def _build_counts_matrix():
+def _in_col_range(c: int, n: int) -> bool:
+    lo, hi = COL_RANGES[c]
+    return lo <= n <= hi
+
+def validate_strip(strip: List[List[List[Optional[int]]]]) -> Tuple[bool, str]:
     """
-    Build a 6x9 matrix 'counts[t][c]' (tickets x columns) with:
-      - Each ticket sums to 15 (=> 5 nums per row x 3 rows)
-      - In each ticket, every column has 1..3 numbers (no empty columns)
-      - Across tickets, each column sums to STRIP_COL_TOTALS[c]
+    Validate a strip of 6 tickets with rules:
+      - strip has 6 tickets
+      - each ticket is 3 x 9
+      - each row has exactly 5 numbers
+      - each column in a ticket has 1..3 numbers (no all-blank columns)
+      - column ranges per number respected
+      - across the strip: numbers 1..90 used exactly once
+      - across the strip: per-column totals equal STRIP_COL_TOTALS
+      - within each ticket column, numbers ascend top->bottom ignoring blanks
     """
-    T = 6
-    C = 9
+    if not isinstance(strip, list) or len(strip) != 6:
+        return False, "strip must contain 6 tickets"
 
-    # Start with 1 per column per ticket (no blank column)
-    counts = [[1 for _ in range(C)] for _ in range(T)]     # baseline 9 per ticket
-
-    # Each ticket needs +6 increments to reach 15
-    inc_left_ticket = [6] * T
-
-    # Each column still needs D[c] increments to reach strip total
-    D = [STRIP_COL_TOTALS[c] - T for c in range(C)]        # since baseline added T=6 per col
-    assert sum(D) == sum(inc_left_ticket), "increments mismatch"
-
-    # Greedy distribute column increments to tickets
-    # Always give next increment of column c to a ticket that:
-    # - still has increments left
-    # - hasn't reached 3 in that column
-    # - prefer ticket with the most increments left (balance)
-    stalled_passes = 0
-    while sum(D) > 0:
-        made_progress = False
-        cols = list(range(C))
-        random.shuffle(cols)
-        for c in cols:
-            while D[c] > 0:
-                # choose ticket with max inc_left that can accept one more in this column
-                options = [t for t in range(T) if inc_left_ticket[t] > 0 and counts[t][c] < 3]
-                if not options:
-                    break
-                options.sort(key=lambda t: (-inc_left_ticket[t], counts[t][c]))
-                t = options[0]
-                counts[t][c] += 1
-                inc_left_ticket[t] -= 1
-                D[c] -= 1
-                made_progress = True
-        if not made_progress:
-            stalled_passes += 1
-            if stalled_passes > 3:
-                # give up and start over
-                return None
-
-    # Sanity checks
-    if any(x != 0 for x in inc_left_ticket):
-        return None
-    for row in counts:
-        if sum(row) != 15:
-            return None
-        if any(not (1 <= v <= 3) for v in row):
-            return None
-    for c in range(C):
-        if sum(counts[t][c] for t in range(T)) != STRIP_COL_TOTALS[c]:
-            return None
-
-    return counts
-
-
-def _assign_rows_for_ticket(col_counts):
-    """
-    Given col_counts[9] with values in 1..3 summing to 15,
-    choose which rows (0..2) each column occupies so that
-    each row ends up with exactly 5 numbers.
-    Returns a 3x9 matrix of 0/1.
-    """
-    R, C = 3, 9
-    grid = [[0] * C for _ in range(R)]
-    row_sums = [0, 0, 0]
-
-    # Columns with 3 first -> must occupy all 3 rows
-    for c in range(C):
-        if col_counts[c] == 3:
-            for r in range(R):
-                grid[r][c] = 1
-            row_sums = [x + 1 for x in row_sums]
-
-    # Then columns with 2 -> pick two smallest rows
-    for c in range(C):
-        if col_counts[c] == 2:
-            # pick two rows with minimal row_sums (tie broken randomly)
-            rows = list(range(R))
-            random.shuffle(rows)
-            rows.sort(key=lambda r: row_sums[r])
-            for r in rows[:2]:
-                grid[r][c] = 1
-                row_sums[r] += 1
-
-    # Finally columns with 1 -> pick the smallest row
-    for c in range(C):
-        if col_counts[c] == 1:
-            rows = list(range(R))
-            random.shuffle(rows)
-            rows.sort(key=lambda r: row_sums[r])
-            r = rows[0]
-            grid[r][c] = 1
-            row_sums[r] += 1
-
-    # Validate exact row sums
-    return grid if row_sums == [5, 5, 5] else None
-
-
-def generate_full_strip():
-    """
-    Return a list of 6 tickets. Each ticket is 3x9, blank=0.
-    Satisfies all Housie strip constraints described above.
-    """
-    # Try a few attempts in case a random assignment can't be row-balanced
-    for _attempt in range(100):
-        counts = _build_counts_matrix()
-        if counts is None:
-            continue
-
-        # Build per-column number pools (use every number exactly once)
-        pools = {c: COLUMN_RANGES[c][:] for c in range(9)}
-        for c in pools:
-            random.shuffle(pools[c])
-
-        strip = []
-        for t in range(6):
-            col_counts = counts[t]
-            row_grid = _assign_rows_for_ticket(col_counts)
-            if row_grid is None:
-                strip = None
-                break
-
-            # Prepare empty 3x9 ticket with zeros as blanks
-            ticket = [[0] * 9 for _ in range(3)]
-
-            # For each column, pull the exact amount from pool and place
-            for c in range(9):
-                need = col_counts[c]
-                chosen = [pools[c].pop() for _ in range(need)]
-                chosen.sort()  # ascending
-                # place chosen numbers into the rows where grid[r][c] == 1, top-to-bottom
-                target_rows = [r for r in range(3) if row_grid[r][c] == 1]
-                target_rows.sort()
-                for val, r in zip(chosen, target_rows):
-                    ticket[r][c] = val
-
-            strip.append(ticket)
-
-        if strip is None:
-            continue
-
-        # Final validation (belt & braces)
-        ok, _ = validate_strip(strip)
-        if ok:
-            return strip
-
-    raise ValueError("Failed to generate a valid strip after many attempts")
-
-
-# ---------- Validator (used by /api/selftest and during generation) ----------
-
-def validate_strip(strip):
-    """
-    strip: list of 6 tickets (each 3x9, blanks = 0)
-    Returns (ok: bool, details: dict)
-    """
-    if len(strip) != 6:
-        return False, {"error": "strip_not_6_tickets"}
-
-    # 1..90 exactly once
+    # per-strip uniqueness check
     seen = set()
+
+    # per-strip column totals
     col_totals = [0] * 9
+
     for t_idx, ticket in enumerate(strip):
-        # shape
-        if len(ticket) != 3 or any(len(row) != 9 for row in ticket):
-            return False, {"error": "bad_shape", "ticket": t_idx}
-
-        # row counts
+        if not isinstance(ticket, list) or len(ticket) != 3:
+            return False, f"ticket {t_idx}: not 3 rows"
         for r in range(3):
-            row_nums = [x for x in ticket[r] if x != 0]
-            if len(row_nums) != 5:
-                return False, {"error": "row_count", "ticket": t_idx, "row": r, "count": len(row_nums)}
+            if not isinstance(ticket[r], list) or len(ticket[r]) != 9:
+                return False, f"ticket {t_idx}: row {r} not 9 cols"
 
-        # col rules & ascending
+        # rows: exactly 5 numbers
+        row_counts = [sum(1 for x in row if x) for row in ticket]
+        if any(c != 5 for c in row_counts):
+            return False, f"ticket {t_idx}: each row must have 5 numbers"
+
+        # columns: 1..3 per ticket, ranges & ascending
         for c in range(9):
-            col_vals = [ticket[r][c] for r in range(3) if ticket[r][c] != 0]
-            # must be 1..3 per ticket column
-            if not (1 <= len(col_vals) <= 3):
-                return False, {"error": "col_1_3", "ticket": t_idx, "col": c, "count": len(col_vals)}
-            # within range
-            low, high = COLUMN_RANGES[c][0], COLUMN_RANGES[c][-1]
-            if any(not (low <= v <= high) for v in col_vals):
-                return False, {"error": "range", "ticket": t_idx, "col": c, "vals": col_vals}
-            # ascending top->bottom
-            ordered = sorted(col_vals)
-            if col_vals != ordered:
-                return False, {"error": "not_sorted", "ticket": t_idx, "col": c, "vals": col_vals}
+            col_vals = [ticket[r][c] for r in range(3) if ticket[r][c]]
+            k = len(col_vals)
+            if k < 1 or k > 3:
+                return False, f"ticket {t_idx}: column {c} has {k} numbers (must be 1..3)"
+            if not all(_in_col_range(c, n) for n in col_vals):
+                return False, f"ticket {t_idx}: column {c} has value out of range"
+            if col_vals != sorted(col_vals):
+                return False, f"ticket {t_idx}: column {c} not ascending"
+            col_totals[c] += k
 
-            col_totals[c] += len(col_vals)
+            # add to global seen
+            for n in col_vals:
+                if n in seen:
+                    return False, f"duplicate number {n} in strip"
+                seen.add(n)
 
-            # track uniqueness
-            for v in col_vals:
-                if v in seen:
-                    return False, {"error": "duplicate", "value": v}
-                seen.add(v)
-
-    # exactly 90 unique numbers
+    # strip must be exactly numbers 1..90
     if seen != set(range(1, 91)):
-        missing = sorted(set(range(1, 91)) - seen)
-        extra = sorted(seen - set(range(1, 91)))
-        return False, {"error": "not_1_to_90_once", "missing": missing, "extra": extra}
+        missing = [n for n in range(1, 91) if n not in seen]
+        extra   = [n for n in sorted(seen) if n < 1 or n > 90]
+        return False, f"strip numbers mismatch (missing={missing[:5]}..., extra={extra[:5]}...)"
 
-    # per-column totals for the whole strip
     if col_totals != STRIP_COL_TOTALS:
-        return False, {"error": "strip_col_totals", "totals": col_totals, "expected": STRIP_COL_TOTALS}
+        return False, f"strip column totals {col_totals} != {STRIP_COL_TOTALS}"
 
-    return True, {"totals": col_totals}
+    return True, "ok"
+
+# ------------------------- GENERATION -------------------------
+
+def _alloc_strip_col_counts() -> List[List[int]]:
+    """
+    Allocate per-column counts to 6 tickets.
+    Matrix A[6][9], each entry in {1,2,3} (no empty columns),
+    column sums equal STRIP_COL_TOTALS, and per-ticket total equals 15.
+    Solve by backtracking on columns with feasibility pruning.
+    """
+    TICKETS = 6
+    COLS = 9
+    target = STRIP_COL_TOTALS[:]              # per-column totals
+    used_per_ticket = [0]*TICKETS             # sum across columns must end at 15 each
+    A = [[0]*COLS for _ in range(TICKETS)]    # result
+
+    def backtrack_col(c: int) -> bool:
+        if c == COLS:
+            # all columns assigned; check per-ticket sums
+            return all(u == 15 for u in used_per_ticket)
+
+        need = target[c]           # sum for this column
+        remaining_cols = COLS - (c + 1)
+
+        # recursive assign a[0..5] in [1..3], sum = need, capacity respected
+        vec = [0]*TICKETS
+
+        # To prune, precompute min/max feasible add for each ticket with remaining cols
+        min_after = remaining_cols * 1
+        max_after = remaining_cols * 3
+
+        def assign_t(ti: int, left: int) -> bool:
+            if ti == TICKETS:
+                if left == 0:
+                    # check feasibility for all tickets for remaining columns
+                    for t in range(TICKETS):
+                        total_now = used_per_ticket[t] + vec[t]
+                        if total_now > 15:
+                            return False
+                        # remaining must be fillable to hit 15
+                        min_need = 15 - total_now - max_after
+                        max_need = 15 - total_now - min_after
+                        # we need some remaining columns to exist; min_need <= 0 <= max_need
+                        if min_need > 0 or max_need < 0:
+                            return False
+                    # commit this column
+                    for t in range(TICKETS):
+                        A[t][c] = vec[t]
+                        used_per_ticket[t] += vec[t]
+                    ok = backtrack_col(c+1)
+                    if not ok:
+                        # rollback
+                        for t in range(TICKETS):
+                            used_per_ticket[t] -= vec[t]
+                            A[t][c] = 0
+                    return ok
+                return False
+
+            # Each ticket must get 1..3 in this column
+            # Also cannot exceed ticket capacity: used + x + min_after <= 15
+            u = used_per_ticket[ti]
+            max_x = min(3, 15 - u - min_after)
+            min_x = max(1, 15 - u - max_after)
+            if max_x < 1: max_x = 1
+            if min_x > 3: min_x = 3
+            lo = max(1, min_x)
+            hi = min(3, max_x)
+
+            # additionally, keep enough left for remaining tickets (at least 1 each)
+            remaining_tickets = TICKETS - ti - 1
+
+            for x in (1,2,3):
+                if x < lo or x > hi:
+                    continue
+                if x > left:
+                    continue
+                # ensure we can give at least 1 to everyone else
+                if left - x < remaining_tickets * 1:
+                    continue
+                # ensure we won't be forced to give more than 3 to someone
+                if left - x > remaining_tickets * 3:
+                    continue
+                vec[ti] = x
+                if assign_t(ti+1, left - x):
+                    return True
+                vec[ti] = 0
+            return False
+
+        return assign_t(0, need)
+
+    ok = backtrack_col(0)
+    if not ok:
+        raise ValueError("Failed to allocate strip column counts")
+    return A  # 6x9, values in {1,2,3}, per-ticket sum=15
+
+def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
+    """
+    Given per-column sums (each 1..3) for one ticket, create a 3x9 0/1 mask
+    where each row sums to 5 and each column sums to the given number.
+    Backtracking on columns; choose which rows receive the 1s.
+    """
+    rows_left = [5,5,5]
+    mask = [[0]*9 for _ in range(3)]
+
+    def choose_rows_for_col(c: int) -> bool:
+        if c == 9:
+            return rows_left == [0,0,0]
+        k = col_sums[c]  # how many rows must be 1 in this column (1..3)
+
+        # pick k distinct rows with rows_left>0
+        rows = [0,1,2]
+        from itertools import combinations
+        for comb in combinations(rows, k):
+            # check capacity
+            if any(rows_left[r] <= 0 for r in comb):
+                continue
+            # apply
+            for r in comb:
+                mask[r][c] = 1
+                rows_left[r] -= 1
+            # prune: remaining columns must be able to fill remaining row slots
+            rem_cols = 9 - (c + 1)
+            need_sum = sum(rows_left)
+            # each remaining column contributes at least 1 and at most 3 to the strip,
+            # but per ticket we only care that total 15 is achievable. At this stage,
+            # we only ensure we don't need more than rem_cols*3 or less than rem_cols*1.
+            if need_sum >= 0 and need_sum <= rem_cols*3:
+                if need_sum >= rem_cols*1:
+                    if choose_rows_for_col(c+1):
+                        return True
+            # rollback
+            for r in comb:
+                mask[r][c] = 0
+                rows_left[r] += 1
+        return False
+
+    if not choose_rows_for_col(0):
+        raise ValueError("Failed to build row mask for ticket")
+    return mask
+
+def generate_full_strip() -> List[List[List[Optional[int]]]]:
+    """
+    Generate one full strip (6 tickets), fully valid per rules.
+    """
+    # 1) Decide how many numbers each column contributes to each of the 6 tickets
+    alloc = _alloc_strip_col_counts()  # [6][9] in {1,2,3}, each ticket sums to 15
+
+    # 2) Pre-generate column pools for the entire strip (unique numbers)
+    pools = []
+    for c in range(9):
+        lo, hi = COL_RANGES[c]
+        nums = list(range(lo, hi+1))
+        random.shuffle(nums)
+        # take exactly STRIP_COL_TOTALS[c] numbers from this column
+        pools.append(nums[:STRIP_COL_TOTALS[c]])
+
+    # 3) For each ticket build a 3x9 mask matching column sums, then fill numbers
+    strip = []
+    # track how many consumed from each column pool so far
+    consumed = [0]*9
+
+    for t in range(6):
+        col_sums = alloc[t]  # len 9, each 1..3, sums to 15
+        mask = _mask_for_ticket(col_sums)
+
+        # create empty 3x9 ticket
+        ticket: List[List[Optional[int]]] = [[None]*9 for _ in range(3)]
+
+        # fill column by column, ascending down the column
+        for c in range(9):
+            need = col_sums[c]
+            take = pools[c][consumed[c]:consumed[c]+need]
+            consumed[c] += need
+            take.sort()  # ascending downwards
+            # place into rows where mask==1
+            rows = [r for r in range(3) if mask[r][c] == 1]
+            for r, val in zip(rows, take):
+                ticket[r][c] = val
+
+        strip.append(ticket)
+
+    # final safety check
+    ok, msg = validate_strip(strip)
+    if not ok:
+        raise ValueError(f"Generated strip failed validation: {msg}")
+    return strip
