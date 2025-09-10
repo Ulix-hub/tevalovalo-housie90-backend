@@ -8,24 +8,24 @@ from datetime import datetime, timedelta, timezone
 app = Flask(__name__)
 
 # ------------ Config ------------
-FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "").strip()  # e.g. https://your-site.netlify.app
-DEFAULT_DB = "/data/codes.db" if os.path.exists("/data") else "codes.db"
-DB_FILE = os.environ.get("DB_FILE", DEFAULT_DB)
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "").strip()
 
-# Allow Netlify apps + localhost by default (and lock to FRONTEND_ORIGIN if set)
-cors_origins = [
-    r"https://*.netlify.app",
+ALLOWED_ORIGINS = [
+    # ⬅️ list your real deploy(s) EXACTLY:
+    "https://tevalovalo-2025-anetot.netlify.app",
+    # add any other deploy previews you actually use:
+    "https://stalwart-zabaione-0381d8.netlify.app",
+    # local dev:
     "http://localhost",
     "http://127.0.0.1",
     "http://127.0.0.1:5500",
 ]
-if FRONTEND_ORIGIN:
-    cors_origins.append(FRONTEND_ORIGIN)
+if FRONTEND_ORIGIN and FRONTEND_ORIGIN not in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS.append(FRONTEND_ORIGIN)
 
 CORS(
     app,
-    resources={r"/*": {"origins": cors_origins}},
+    resources={r"/*": {"origins": ALLOWED_ORIGINS}},
     supports_credentials=False,
     methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Admin-Key", "X-Device-Id"],
@@ -38,6 +38,7 @@ def add_cors_headers(resp):
     resp.headers.setdefault("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
     resp.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Admin-Key, X-Device-Id")
     return resp
+
 
 lock = Lock()
 
