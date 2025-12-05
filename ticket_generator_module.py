@@ -180,15 +180,20 @@ def _alloc_strip_col_counts() -> List[List[int]]:
         tot: compositions_of_total(tot, TICKETS) for tot in set(target)
     }
 
-    def backtrack_col(c: int) -> bool:
-        if c == COLS:
+    # Randomize the order of columns a bit to avoid structural bias
+    col_order = list(range(COLS))
+    random.shuffle(col_order)
+
+    def backtrack_col(idx: int) -> bool:
+        if idx == COLS:
             # All columns assigned; check each ticket has exactly 15
             return all(u == 15 for u in used_per_ticket)
 
+        c = col_order[idx]
         need = target[c]
         candidates = possible_for_total[need]
 
-        remaining_cols = COLS - c - 1
+        remaining_cols = COLS - idx - 1
 
         for vec in candidates:
             # Check ticket capacity with this column assignment
@@ -221,7 +226,7 @@ def _alloc_strip_col_counts() -> List[List[int]]:
                 A[t][c] = vec[t]
                 used_per_ticket[t] += vec[t]
 
-            if backtrack_col(c + 1):
+            if backtrack_col(idx + 1):
                 return True
 
             # rollback
@@ -242,7 +247,8 @@ def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
     where each row sums to 5 and each column sums to the given number.
 
     mask[r][c] = 1 means there will be a number at (r,c).
-    Uses backtracking by columns with simple pruning.
+    Uses backtracking by columns with randomised row/combination order
+    to avoid repeating the same visual pattern.
     """
     if len(col_sums) != 9:
         raise ValueError("col_sums must have length 9")
@@ -252,19 +258,31 @@ def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
     rows_left = [5, 5, 5]          # how many cells still needed per row
     mask = [[0] * 9 for _ in range(3)]
 
-    def backtrack(c: int) -> bool:
-        if c == 9:
+    # randomize the order we process columns in, to add visual variation
+    col_order = list(range(9))
+    random.shuffle(col_order)
+
+    def backtrack(idx: int) -> bool:
+        if idx == 9:
+            # restore original column order for mask
             return rows_left == [0, 0, 0]
 
+        c = col_order[idx]
         k = col_sums[c]  # how many rows must be 1 in this column (1..3)
-        # choose k distinct rows with rows_left > 0
+
+        # choose k distinct rows with rows_left > 0, in random order
         valid_rows = [r for r in range(3) if rows_left[r] > 0]
         if len(valid_rows) < k:
             return False
 
-        remaining_cols = 8 - c  # columns after this one
+        # randomize row order to vary patterns
+        random.shuffle(valid_rows)
+        combs = list(combinations(valid_rows, k))
+        random.shuffle(combs)
 
-        for comb in combinations(valid_rows, k):
+        remaining_cols = 8 - idx  # columns after this one (in this order)
+
+        for comb in combs:
             # apply this choice
             for r in comb:
                 rows_left[r] -= 1
@@ -281,7 +299,7 @@ def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
                     break
 
             if feasible:
-                if backtrack(c + 1):
+                if backtrack(idx + 1):
                     return True
 
             # rollback
@@ -299,7 +317,8 @@ def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
 def generate_full_strip(max_attempts: int = 200) -> List[List[List[Optional[int]]]]:
     """
     Generate one full strip (6 tickets), fully valid per rules AND
-    reasonably balanced left/middle/right on each ticket.
+    reasonably balanced left/middle/right on each ticket, with extra
+    randomness in layout to avoid repetitive visual patterns.
 
     Rules enforced:
       - 6 tickets per strip
@@ -337,9 +356,16 @@ def generate_full_strip(max_attempts: int = 200) -> List[List[List[Optional[int]
         strip: List[List[List[Optional[int]]]] = []
         consumed = [0] * 9  # how many from each column pool used so far
 
+        # Randomize ticket order while constructing (just for variation)
+        ticket_indices = list(range(6))
+        random.shuffle(ticket_indices)
+
         try:
-            for t in range(6):
-                col_sums = alloc[t]  # length 9, in {1..3}, sums to 15
+            # temp storage so we can restore tickets in correct order
+            tickets_tmp: List[Optional[List[List[Optional[int]]]]] = [None] * 6
+
+            for t_pos in ticket_indices:
+                col_sums = alloc[t_pos]  # length 9, in {1..3}, sums to 15
                 mask = _mask_for_ticket(col_sums)
 
                 ticket: List[List[Optional[int]]] = [[None] * 9 for _ in range(3)]
@@ -351,11 +377,13 @@ def generate_full_strip(max_attempts: int = 200) -> List[List[List[Optional[int]
                     take.sort()  # ascending numbers in this column
 
                     rows = [r for r in range(3) if mask[r][c] == 1]
-                    # rows length must equal 'need'
                     for r, val in zip(rows, take):
                         ticket[r][c] = val
 
-                strip.append(ticket)
+                tickets_tmp[t_pos] = ticket
+
+            # restore logical order t=0..5
+            strip = [tickets_tmp[i] for i in range(6)]  # type: ignore
 
             ok, msg = validate_strip(strip)
             last_valid_strip, last_msg = (strip, msg)
