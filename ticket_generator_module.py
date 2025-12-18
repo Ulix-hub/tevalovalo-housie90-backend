@@ -108,25 +108,15 @@ def _ticket_block_counts(ticket: List[List[Optional[int]]]) -> Tuple[int, int, i
 
 
 def _is_balanced_ticket(ticket: List[List[Optional[int]]]) -> bool:
-    """
-    Balanced if max(block)-min(block) <= 2 across left/mid/right blocks.
-    """
     left, mid, right = _ticket_block_counts(ticket)
     return (max(left, mid, right) - min(left, mid, right)) <= 2
 
 
 def _alloc_is_balanced(alloc_row: List[int]) -> bool:
-    """
-    alloc_row length 9 sums to 15.
-    """
     left = sum(alloc_row[0:3])
     mid = sum(alloc_row[3:6])
     right = sum(alloc_row[6:9])
     return (max(left, mid, right) - min(left, mid, right)) <= 2
-
-
-def _block_index(col: int) -> int:
-    return 0 if col <= 2 else (1 if col <= 5 else 2)
 
 
 # ========================= GENERATION =========================
@@ -136,20 +126,18 @@ def _alloc_strip_col_counts() -> List[List[int]]:
     Allocate per-column counts to 6 tickets.
 
     Returns A[6][9] such that:
-      - A[t][c] in {1,2,3} (each ticket uses that column at least once)
+      - A[t][c] in {1,2,3}
       - For each column c, sum_t A[t][c] = STRIP_COL_TOTALS[c]
       - For each ticket t, sum_c A[t][c] = 15
-      - Additionally: each ticket is balanced across left/middle/right blocks
-        based on column totals (prevents heavy-left/heavy-right tickets).
+
+    NOTE: No balance pruning here (keeps it fast on Render).
+    Balance is enforced by retrying allocations in generate_full_strip().
     """
     TICKETS = 6
     COLS = 9
     target = STRIP_COL_TOTALS[:]
     A = [[0] * COLS for _ in range(TICKETS)]
     used_per_ticket = [0] * TICKETS
-
-    # Track partial block totals while building (left/mid/right per ticket)
-    block_used = [[0, 0, 0] for _ in range(TICKETS)]
 
     def compositions_of_total(total: int, k: int) -> List[List[int]]:
         result: List[List[int]] = []
@@ -182,19 +170,16 @@ def _alloc_strip_col_counts() -> List[List[int]]:
 
     def backtrack_col(idx: int) -> bool:
         if idx == COLS:
-            return all(u == 15 for u in used_per_ticket) and all(_alloc_is_balanced(A[t]) for t in range(TICKETS))
+            return all(u == 15 for u in used_per_ticket)
 
         c = col_order[idx]
         need = target[c]
         candidates = possible_for_total[need]
         remaining_cols = COLS - idx - 1
 
-        b = _block_index(c)
-
         for vec in candidates:
             ok = True
 
-            # Capacity / feasibility check per ticket
             for t in range(TICKETS):
                 new_used = used_per_ticket[t] + vec[t]
                 if new_used > 15:
@@ -216,37 +201,21 @@ def _alloc_strip_col_counts() -> List[List[int]]:
             if not ok:
                 continue
 
-            # Balance pruning (loose but effective):
-            # if adding this column already makes the block gap > 2, reject early.
-            for t in range(TICKETS):
-                tmp_blocks = block_used[t][:]
-                tmp_blocks[b] += vec[t]
-                if (max(tmp_blocks) - min(tmp_blocks)) > 2:
-                    ok = False
-                    break
-
-            if not ok:
-                continue
-
-            # Commit
             for t in range(TICKETS):
                 A[t][c] = vec[t]
                 used_per_ticket[t] += vec[t]
-                block_used[t][b] += vec[t]
 
             if backtrack_col(idx + 1):
                 return True
 
-            # Rollback
             for t in range(TICKETS):
                 used_per_ticket[t] -= vec[t]
-                block_used[t][b] -= vec[t]
                 A[t][c] = 0
 
         return False
 
     if not backtrack_col(0):
-        raise ValueError("Failed to allocate strip column counts (balanced)")
+        raise ValueError("Failed to allocate strip column counts")
 
     return A
 
@@ -316,16 +285,24 @@ def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
 
 def generate_full_strip(max_attempts: int = 200) -> List[List[List[Optional[int]]]]:
     """
-    Generate one full strip (6 tickets), fully valid per rules AND balanced.
+    Generate one full strip (6 tickets), valid per rules AND balanced.
 
-    If no balanced strip is found within max_attempts, but at least one
-    strictly valid strip was generated, that last valid strip is returned.
+    Balance is achieved by retrying allocations quickly until balanced,
+    rather than balance-pruning inside the backtracking (prevents timeouts).
     """
     last_valid_strip: Optional[List[List[List[Optional[int]]]]] = None
     last_msg: str = "no_attempt"
 
     for _ in range(max_attempts):
-        alloc = _alloc_strip_col_counts()  # balanced allocation by design
+        # ---- FAST: retry allocations until balanced ----
+        alloc = None
+        for _alloc_try in range(80):
+            a = _alloc_strip_col_counts()
+            if all(_alloc_is_balanced(a[t]) for t in range(6)):
+                alloc = a
+                break
+        if alloc is None:
+            continue
 
         pools: List[List[int]] = []
         for c in range(9):
@@ -349,7 +326,7 @@ def generate_full_strip(max_attempts: int = 200) -> List[List[List[Optional[int]
 
                 for c in range(9):
                     need = col_sums[c]
-                    take = pools[c][consumed[c]: consumed[c] + need]
+                    take = pools[c][consumed[c] : consumed[c] + need]
                     consumed[c] += need
                     take.sort()
 
@@ -366,10 +343,10 @@ def generate_full_strip(max_attempts: int = 200) -> List[List[List[Optional[int]
             if not ok:
                 continue
 
-            # Only store if truly valid (FIXED BUG)
+            # store only if truly valid
             last_valid_strip = strip
 
-            # Extra safety (should always pass now)
+            # should be balanced, but keep safety check
             if all(_is_balanced_ticket(t) for t in strip):
                 return strip
 
