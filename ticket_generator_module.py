@@ -44,8 +44,8 @@ def validate_strip(strip: List[List[List[Optional[int]]]]) -> Tuple[bool, str]:
     if not isinstance(strip, list) or len(strip) != 6:
         return False, "strip must contain 6 tickets"
 
-    seen = set()              # global uniqueness
-    col_totals = [0] * 9      # per-strip column totals
+    seen = set()
+    col_totals = [0] * 9
 
     for t_idx, ticket in enumerate(strip):
         if not isinstance(ticket, list) or len(ticket) != 3:
@@ -54,12 +54,10 @@ def validate_strip(strip: List[List[List[Optional[int]]]]) -> Tuple[bool, str]:
             if not isinstance(ticket[r], list) or len(ticket[r]) != 9:
                 return False, f"ticket {t_idx}: row {r} not 9 cols"
 
-        # rows: exactly 5 numbers
         row_counts = [sum(1 for x in row if x) for row in ticket]
         if any(c != 5 for c in row_counts):
             return False, f"ticket {t_idx}: each row must have 5 numbers"
 
-        # columns: 1..3 per ticket, ranges & ascending, and contribute to strip totals
         for c in range(9):
             col_vals = [ticket[r][c] for r in range(3) if ticket[r][c]]
             k = len(col_vals)
@@ -71,13 +69,11 @@ def validate_strip(strip: List[List[List[Optional[int]]]]) -> Tuple[bool, str]:
                 return False, f"ticket {t_idx}: column {c} not ascending"
             col_totals[c] += k
 
-            # global uniqueness
             for n in col_vals:
                 if n in seen:
                     return False, f"duplicate number {n} in strip"
                 seen.add(n)
 
-    # strip must be exactly numbers 1..90
     if seen != set(range(1, 91)):
         missing = [n for n in range(1, 91) if n not in seen]
         extra = [n for n in sorted(seen) if n < 1 or n > 90]
@@ -113,15 +109,24 @@ def _ticket_block_counts(ticket: List[List[Optional[int]]]) -> Tuple[int, int, i
 
 def _is_balanced_ticket(ticket: List[List[Optional[int]]]) -> bool:
     """
-    A ticket is 'balanced' if the distribution of numbers across
-    left/middle/right blocks is not too extreme.
-    Condition: max(block) - min(block) <= 2
-    This avoids tickets heavily skewed to left or right.
+    Balanced if max(block)-min(block) <= 2 across left/mid/right blocks.
     """
     left, mid, right = _ticket_block_counts(ticket)
-    mx = max(left, mid, right)
-    mn = min(left, mid, right)
-    return (mx - mn) <= 2
+    return (max(left, mid, right) - min(left, mid, right)) <= 2
+
+
+def _alloc_is_balanced(alloc_row: List[int]) -> bool:
+    """
+    alloc_row length 9 sums to 15.
+    """
+    left = sum(alloc_row[0:3])
+    mid = sum(alloc_row[3:6])
+    right = sum(alloc_row[6:9])
+    return (max(left, mid, right) - min(left, mid, right)) <= 2
+
+
+def _block_index(col: int) -> int:
+    return 0 if col <= 2 else (1 if col <= 5 else 2)
 
 
 # ========================= GENERATION =========================
@@ -133,21 +138,20 @@ def _alloc_strip_col_counts() -> List[List[int]]:
     Returns A[6][9] such that:
       - A[t][c] in {1,2,3} (each ticket uses that column at least once)
       - For each column c, sum_t A[t][c] = STRIP_COL_TOTALS[c]
-      - For each ticket t, sum_c A[t][c] = 15  (15 numbers per ticket)
-
-    This uses backtracking over columns with feasibility pruning.
+      - For each ticket t, sum_c A[t][c] = 15
+      - Additionally: each ticket is balanced across left/middle/right blocks
+        based on column totals (prevents heavy-left/heavy-right tickets).
     """
     TICKETS = 6
     COLS = 9
-    target = STRIP_COL_TOTALS[:]  # per-column totals
+    target = STRIP_COL_TOTALS[:]
     A = [[0] * COLS for _ in range(TICKETS)]
     used_per_ticket = [0] * TICKETS
 
+    # Track partial block totals while building (left/mid/right per ticket)
+    block_used = [[0, 0, 0] for _ in range(TICKETS)]
+
     def compositions_of_total(total: int, k: int) -> List[List[int]]:
-        """
-        All k-length lists of integers in [1,3] that sum to total.
-        Used for one column (6 tickets).
-        """
         result: List[List[int]] = []
 
         def rec(i: int, rem: int, cur: List[int]):
@@ -155,12 +159,9 @@ def _alloc_strip_col_counts() -> List[List[int]]:
                 if rem == 0:
                     result.append(cur[:])
                 return
-            # At position i, choose x in [1,3] such that it is still possible
             for x in (1, 2, 3):
                 if x > rem:
                     continue
-                # min sum for remaining slots = 1*(k-i-1)
-                # max sum for remaining slots = 3*(k-i-1)
                 rem_after = rem - x
                 if rem_after < (k - i - 1) * 1:
                     continue
@@ -171,74 +172,83 @@ def _alloc_strip_col_counts() -> List[List[int]]:
                 cur.pop()
 
         rec(0, total, [])
-        # Randomize order to vary patterns between runs
         random.shuffle(result)
         return result
 
-    # Precompute possible column distributions for each needed total
-    possible_for_total = {
-        tot: compositions_of_total(tot, TICKETS) for tot in set(target)
-    }
+    possible_for_total = {tot: compositions_of_total(tot, TICKETS) for tot in set(target)}
 
-    # Randomize the order of columns a bit to avoid structural bias
     col_order = list(range(COLS))
     random.shuffle(col_order)
 
     def backtrack_col(idx: int) -> bool:
         if idx == COLS:
-            # All columns assigned; check each ticket has exactly 15
-            return all(u == 15 for u in used_per_ticket)
+            return all(u == 15 for u in used_per_ticket) and all(_alloc_is_balanced(A[t]) for t in range(TICKETS))
 
         c = col_order[idx]
         need = target[c]
         candidates = possible_for_total[need]
-
         remaining_cols = COLS - idx - 1
 
+        b = _block_index(c)
+
         for vec in candidates:
-            # Check ticket capacity with this column assignment
             ok = True
+
+            # Capacity / feasibility check per ticket
             for t in range(TICKETS):
                 new_used = used_per_ticket[t] + vec[t]
                 if new_used > 15:
                     ok = False
                     break
+
                 if remaining_cols > 0:
-                    # remaining numbers needed after this column
                     rem_need = 15 - new_used
-                    # min numbers remaining we can still add to this ticket
                     min_possible = remaining_cols * 1
                     max_possible = remaining_cols * 3
-                    # rem_need must be in [min_possible, max_possible]
                     if rem_need < min_possible or rem_need > max_possible:
                         ok = False
                         break
                 else:
-                    # no more columns left; must be exactly 15
                     if new_used != 15:
                         ok = False
                         break
+
             if not ok:
                 continue
 
-            # commit this column
+            # Balance pruning (loose but effective):
+            # if adding this column already makes the block gap > 2, reject early.
+            for t in range(TICKETS):
+                tmp_blocks = block_used[t][:]
+                tmp_blocks[b] += vec[t]
+                if (max(tmp_blocks) - min(tmp_blocks)) > 2:
+                    ok = False
+                    break
+
+            if not ok:
+                continue
+
+            # Commit
             for t in range(TICKETS):
                 A[t][c] = vec[t]
                 used_per_ticket[t] += vec[t]
+                block_used[t][b] += vec[t]
 
             if backtrack_col(idx + 1):
                 return True
 
-            # rollback
+            # Rollback
             for t in range(TICKETS):
                 used_per_ticket[t] -= vec[t]
+                block_used[t][b] -= vec[t]
                 A[t][c] = 0
 
         return False
 
     if not backtrack_col(0):
-        raise ValueError("Failed to allocate strip column counts")
-    return A  # 6x9, each entry in {1,2,3}
+        raise ValueError("Failed to allocate strip column counts (balanced)")
+
+    return A
 
 
 def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
@@ -246,49 +256,41 @@ def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
     Given per-column sums (each 1..3) for one ticket, create a 3x9 0/1 mask
     where each row sums to 5 and each column sums to the given number.
 
-    mask[r][c] = 1 means there will be a number at (r,c).
-    Uses backtracking by columns with randomised row/combination order
-    to avoid repeating the same visual pattern.
+    Uses randomized order to avoid repeating patterns.
     """
     if len(col_sums) != 9:
         raise ValueError("col_sums must have length 9")
     if sum(col_sums) != 15:
         raise ValueError("sum(col_sums) must be 15 for a ticket")
 
-    rows_left = [5, 5, 5]          # how many cells still needed per row
+    rows_left = [5, 5, 5]
     mask = [[0] * 9 for _ in range(3)]
 
-    # randomize the order we process columns in, to add visual variation
     col_order = list(range(9))
     random.shuffle(col_order)
 
     def backtrack(idx: int) -> bool:
         if idx == 9:
-            # restore original column order for mask
             return rows_left == [0, 0, 0]
 
         c = col_order[idx]
-        k = col_sums[c]  # how many rows must be 1 in this column (1..3)
+        k = col_sums[c]
 
-        # choose k distinct rows with rows_left > 0, in random order
         valid_rows = [r for r in range(3) if rows_left[r] > 0]
         if len(valid_rows) < k:
             return False
 
-        # randomize row order to vary patterns
         random.shuffle(valid_rows)
         combs = list(combinations(valid_rows, k))
         random.shuffle(combs)
 
-        remaining_cols = 8 - idx  # columns after this one (in this order)
+        remaining_cols = 8 - idx
 
         for comb in combs:
-            # apply this choice
             for r in comb:
                 rows_left[r] -= 1
                 mask[r][c] = 1
 
-            # prune: each row can't need more than remaining_cols cells
             feasible = True
             for r in range(3):
                 if rows_left[r] < 0:
@@ -298,11 +300,9 @@ def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
                     feasible = False
                     break
 
-            if feasible:
-                if backtrack(idx + 1):
-                    return True
+            if feasible and backtrack(idx + 1):
+                return True
 
-            # rollback
             for r in comb:
                 rows_left[r] += 1
                 mask[r][c] = 0
@@ -316,65 +316,42 @@ def _mask_for_ticket(col_sums: List[int]) -> List[List[int]]:
 
 def generate_full_strip(max_attempts: int = 200) -> List[List[List[Optional[int]]]]:
     """
-    Generate one full strip (6 tickets), fully valid per rules AND
-    reasonably balanced left/middle/right on each ticket, with extra
-    randomness in layout to avoid repetitive visual patterns.
-
-    Rules enforced:
-      - 6 tickets per strip
-      - each ticket is 3x9
-      - each row has exactly 5 numbers
-      - each column in a ticket has 1..3 numbers
-      - each ticket’s columns respect COL_RANGES
-      - across the strip: numbers 1..90 used exactly once
-      - strip column totals equal STRIP_COL_TOTALS
-      - columns in each ticket ascend top->bottom
-      - each ticket is 'balanced' across left/middle/right blocks
-        (max(block) - min(block) <= 2)
+    Generate one full strip (6 tickets), fully valid per rules AND balanced.
 
     If no balanced strip is found within max_attempts, but at least one
-    strictly valid strip was generated, that last valid strip is returned
-    as a fallback.
+    strictly valid strip was generated, that last valid strip is returned.
     """
     last_valid_strip: Optional[List[List[List[Optional[int]]]]] = None
     last_msg: str = "no_attempt"
 
     for _ in range(max_attempts):
-        # 1) Decide how many numbers each column contributes to each of the 6 tickets
-        alloc = _alloc_strip_col_counts()  # shape [6][9], entries in {1,2,3}
+        alloc = _alloc_strip_col_counts()  # balanced allocation by design
 
-        # 2) Pre-generate column pools for the entire strip (unique numbers per column)
         pools: List[List[int]] = []
         for c in range(9):
             lo, hi = COL_RANGES[c]
             nums = list(range(lo, hi + 1))
             random.shuffle(nums)
-            # take exactly STRIP_COL_TOTALS[c] numbers from this column
             pools.append(nums[:STRIP_COL_TOTALS[c]])
 
-        # 3) For each ticket, build a 3x9 mask matching column sums, then fill numbers
-        strip: List[List[List[Optional[int]]]] = []
-        consumed = [0] * 9  # how many from each column pool used so far
-
-        # Randomize ticket order while constructing (just for variation)
+        consumed = [0] * 9
         ticket_indices = list(range(6))
         random.shuffle(ticket_indices)
 
         try:
-            # temp storage so we can restore tickets in correct order
             tickets_tmp: List[Optional[List[List[Optional[int]]]]] = [None] * 6
 
             for t_pos in ticket_indices:
-                col_sums = alloc[t_pos]  # length 9, in {1..3}, sums to 15
+                col_sums = alloc[t_pos]
                 mask = _mask_for_ticket(col_sums)
 
                 ticket: List[List[Optional[int]]] = [[None] * 9 for _ in range(3)]
 
                 for c in range(9):
                     need = col_sums[c]
-                    take = pools[c][consumed[c] : consumed[c] + need]
+                    take = pools[c][consumed[c]: consumed[c] + need]
                     consumed[c] += need
-                    take.sort()  # ascending numbers in this column
+                    take.sort()
 
                     rows = [r for r in range(3) if mask[r][c] == 1]
                     for r, val in zip(rows, take):
@@ -382,25 +359,24 @@ def generate_full_strip(max_attempts: int = 200) -> List[List[List[Optional[int]
 
                 tickets_tmp[t_pos] = ticket
 
-            # restore logical order t=0..5
             strip = [tickets_tmp[i] for i in range(6)]  # type: ignore
 
             ok, msg = validate_strip(strip)
-            last_valid_strip, last_msg = (strip, msg)
+            last_msg = msg
             if not ok:
-                # invalid strip; retry
                 continue
 
-            # Additional balance constraint per ticket
+            # Only store if truly valid (FIXED BUG)
+            last_valid_strip = strip
+
+            # Extra safety (should always pass now)
             if all(_is_balanced_ticket(t) for t in strip):
                 return strip
 
         except Exception as e:
-            last_valid_strip = None
             last_msg = str(e)
-            # try again
+            continue
 
-    # Fallback: if we had at least one strictly valid strip, return it
     if last_valid_strip is not None:
         return last_valid_strip
 
